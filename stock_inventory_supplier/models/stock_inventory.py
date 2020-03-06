@@ -20,7 +20,7 @@
 
 import logging
 
-from openerp import models, fields, api, _
+from odoo import models, fields, api, _
 
 _logger = logging.getLogger(__name__)
 
@@ -36,46 +36,55 @@ class StockInventory(models.Model):
     )
 
     filter = fields.Selection(
-            selection='_get_available_filters'
+            selection='_selection_filters'
     )
 
     @api.model
-    def _get_available_filters(self):
-        res_filter = super(StockInventory, self)._get_available_filters()
+    def _selection_filters(self):
+        res_filter = super(StockInventory, self)._selection_filter()
         res_filter.append(('supplier', _('Only Products from Supplier')))
         return res_filter
 
     @api.model
-    def _get_inventory_lines(self, inventory):
-        if inventory.supplier_id:
-            location_obj = self.env['stock.location']
-            product_obj = self.env['product.product']
-            locations = location_obj.search(
-                    [
-                        ('id', 'child_of', [inventory.location_id.id])
-                    ]
-            )
-
-            domain = ' sq.location_id in %s'
+    def _get_inventory_lines_values(self):
+        if self.supplier_id:
+            locations = self.env['stock.location'].search([('id', 'child_of', [self.location_id.id])])
+            domain = ' location_id in %s AND quantity != 0 AND active = TRUE'
             args = (tuple(locations.ids),)
-            if inventory.partner_id:
+            vals = []
+            Product = self.env['product.product']
+            quant_products = self.env['product.product']
+            products_to_filter = self.env['product.product']
+
+            if self.company_id:
+                domain += ' AND sq.company_id = %s'
+                args += (self.company_id.id,)
+
+            if self.partner_id:
                 domain += ' and sq.owner_id = %s'
-                args += (inventory.partner_id.id,)
-            if inventory.lot_id:
+                args += (self.partner_id.id,)
+            if self.lot_id:
                 domain += ' and sq.lot_id = %s'
-                args += (inventory.lot_id.id,)
-            if inventory.product_id:
+                args += (self.lot_id.id,)
+            if self.product_id:
                 domain += ' and sq.product_id = %s'
-                args += (inventory.product_id.id,)
-            if inventory.package_id:
+                args += (self.product_id.id,)
+            if self.package_id:
                 domain += ' and sq.package_id = %s'
-                args += (inventory.package_id.id,)
-            if inventory.supplier_id:
+                args += (self.package_id.id,)
+            if self.category_id:
+                categ_products = Product.search([('categ_id', 'child_of', self.category_id.id)])
+                domain += ' AND sq.product_id = ANY (%s)'
+                args += (categ_products.ids,)
+                products_to_filter |= categ_products
+            if self.supplier_id:
+                # supplier_products = Product.search([('supplier', 'child_of', self.supplier_id)])
                 domain += ' and si.name = %s'
-                args += (inventory.supplier_id.id,)
+                args += (self.supplier_id.id,)
+                # products_to_filter |= supplier_products
 
             self.env.cr.execute('''
-                   SELECT sq.product_id as product_id, sum(sq.qty) as product_qty, sq.location_id as location_id,
+                   SELECT sq.product_id as product_id, sum(sq.quantity) as product_qty, sq.location_id as location_id,
                    sq.lot_id as prod_lot_id, sq.package_id as package_id, sq.owner_id as partner_id, si.name as supplier_id
                    FROM stock_quant as sq
                    INNER JOIN product_product as pp on pp.id =  sq.product_id
@@ -83,18 +92,18 @@ class StockInventory(models.Model):
                    WHERE''' + domain + '''
                    GROUP BY sq.product_id, sq.location_id, sq.lot_id, sq.package_id, sq.owner_id, si.name
                 ''', args)
-            vals = []
-            for product_line in self.env.cr.dictfetchall():
-                #replace the None the dictionary by False, because falsy values are tested later on
-                for key, value in product_line.items():
-                    if not value:
-                        product_line[key] = False
-                product_line['inventory_id'] = inventory.id
-                product_line['theoretical_qty'] = product_line['product_qty']
-                if product_line['product_id']:
-                    product = product_obj.browse(product_line['product_id'])
-                    product_line['product_uom_id'] = product.uom_id.id
-                vals.append(product_line)
+
+            for product_data in self.env.cr.dictfetchall():
+                for void_field in [item[0] for item in product_data.items() if item[1] is None]:
+                    product_data[void_field] = False
+                product_data['theoretical_qty'] = product_data['product_qty']
+                if product_data['product_id']:
+                   product_data['product_uom_id'] = Product.browse(product_data['product_id']).uom_id.id
+                   quant_products |= Product.browse(product_data['product_id'])
+                vals.append(product_data)
+            #if self.exhausted:
+            #    exhausted_vals = self._get_exhausted_inventory_line(products_to_filter, quant_products)
+            #    vals.extend(exhausted_vals)
         else:
-            vals = super(StockInventory, self)._get_inventory_lines(inventory)
+            vals = super(StockInventory, self)._get_inventory_lines_values()
         return vals
