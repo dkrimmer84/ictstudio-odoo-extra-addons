@@ -19,7 +19,7 @@
 ##############################################################################
 
 {
-    'name': 'Stock Inventory for specific Supplier222',
+    'name': 'Stock Inventory for specific Supplier',
     'version': '12.0.0.0.0',
     'website': 'http://www.ictstudio.euuuuu',
     'category': 'Product',
